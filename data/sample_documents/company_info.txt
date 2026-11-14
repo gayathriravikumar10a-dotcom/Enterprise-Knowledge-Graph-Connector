@@ -1,0 +1,12 @@
+﻿Employee: Asha
+Department: Artificial Intelligence
+Project: Project Atlas
+
+Employee: Ravi
+Department: Engineering
+Role: Project Manager
+Project: Project Atlas
+
+Project Atlas is an enterprise AI knowledge management initiative.
+Asha works on Project Atlas.
+Ravi manages Project Atlas.

@@ -1,0 +1,13 @@
+pymupdf
+python-docx
+pandas
+python-dotenv
+pytest
+spacy
+sentence-transformers
+chromadb
+neo4j
+google-generativeai
+fastapi
+uvicorn
+streamlit

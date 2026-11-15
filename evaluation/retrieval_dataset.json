@@ -1,0 +1,21 @@
+
+[
+  {
+    "query": "Which employee manages Project Atlas?",
+    "relevant_filenames": [
+      "company_info.txt"
+    ]
+  },
+  {
+    "query": "Which department does Asha belong to?",
+    "relevant_filenames": [
+      "company_info.txt"
+    ]
+  },
+  {
+    "query": "What outcomes are available for the ASIP project?",
+    "relevant_filenames": [
+      "ASIP_ID_Guide_Name_Project_Title_Summary (1).docx"
+    ]
+  }
+]

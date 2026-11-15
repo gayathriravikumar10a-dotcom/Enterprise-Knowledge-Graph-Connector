@@ -326,6 +326,86 @@ def delete_document(document_id: str):
             graph_store.close()
 
 
+@app.put("/documents/{document_id}")
+async def update_document(
+    document_id: str,
+    file: UploadFile = File(...)
+):
+    vector_store = None
+
+    try:
+        # Find the existing document.
+        vector_store = ChromaVectorStore(
+            collection_name="enterprise_documents"
+        )
+
+        documents = vector_store.list_documents()
+
+        existing_document = next(
+            (
+                item for item in documents
+                if item["document_id"] == document_id
+            ),
+            None
+        )
+
+        if existing_document is None:
+            raise HTTPException(
+                status_code=404,
+                detail="Document not found."
+            )
+
+    finally:
+        if vector_store is not None:
+            vector_store.close()
+
+    # Only allow replacement using the same filename.
+    new_filename = Path(file.filename or "unknown").name
+
+    if new_filename.casefold() != existing_document["filename"].casefold():
+        raise HTTPException(
+            status_code=400,
+            detail="Replacement filename must match the existing filename."
+        )
+
+    # Index the new version first.
+    new_document = await upload_document(file)
+
+    new_document_id = new_document["document_id"]
+
+    # Same content means no replacement is necessary.
+    if new_document_id == document_id:
+        return {
+            "message": "Document is already up to date.",
+            "document_id": document_id,
+            "filename": new_filename
+        }
+
+    # Remove the old version only after successful indexing.
+    try:
+        old_document_cleanup = delete_document(document_id)
+
+    except Exception as error:
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "message": "New version was indexed, but old version cleanup failed.",
+                "new_document_id": new_document_id,
+                "old_document_id": document_id,
+                "cleanup_error": str(error)
+            }
+        )
+
+    return {
+        "message": "Document updated and re-indexed successfully.",
+        "old_document_id": document_id,
+        "new_document_id": new_document_id,
+        "filename": new_filename,
+        "new_chunks_indexed": new_document["chunks_created"],
+        "old_chunks_deleted": old_document_cleanup["chunks_deleted"],
+        "old_graph_cleanup": old_document_cleanup["graph_cleanup"]
+    }
+
 @app.on_event("shutdown")
 def shutdown():
     global pipeline

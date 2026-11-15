@@ -1,4 +1,5 @@
-﻿from pathlib import Path
+﻿
+from pathlib import Path
 
 import chromadb
 from sentence_transformers import SentenceTransformer
@@ -37,7 +38,6 @@ class ChromaVectorStore:
             else:
                 cleaned[str(key)] = str(value)
 
-        # ChromaDB does not accept empty metadata dictionaries.
         if not cleaned:
             cleaned = {
                 "chunk_index": index,
@@ -132,6 +132,64 @@ class ChromaVectorStore:
 
         return retrieved
 
+    def list_documents(self, batch_size=1000):
+        """
+        List uploaded documents by grouping their indexed chunks
+        using the document_id metadata.
+        """
+
+        documents = {}
+
+        total_count = self.collection.count()
+        offset = 0
+
+        while offset < total_count:
+
+            results = self.collection.get(
+                limit=batch_size,
+                offset=offset,
+                include=["metadatas"]
+            )
+
+            ids = results.get("ids", [])
+            metadatas = results.get("metadatas", [])
+
+            if not ids:
+                break
+
+            for chunk_id, metadata in zip(ids, metadatas):
+
+                metadata = metadata or {}
+
+                document_id = metadata.get("document_id")
+
+                # Ignore legacy chunks that were not uploaded
+                # through the document upload endpoint.
+                if not document_id:
+                    continue
+
+                if document_id not in documents:
+                    documents[document_id] = {
+                        "document_id": document_id,
+                        "filename": metadata.get(
+                            "original_filename",
+                            metadata.get("source", "unknown")
+                        ),
+                        "chunks_indexed": 0
+                    }
+
+                documents[document_id]["chunks_indexed"] += 1
+
+            offset += len(ids)
+
+            if len(ids) < batch_size:
+                break
+
+        return sorted(
+            documents.values(),
+            key=lambda item: item["filename"].lower()
+        )
+
     def count(self):
         return self.collection.count()
 
@@ -139,3 +197,4 @@ class ChromaVectorStore:
         self.client.delete_collection(
             name=self.collection.name
         )
+

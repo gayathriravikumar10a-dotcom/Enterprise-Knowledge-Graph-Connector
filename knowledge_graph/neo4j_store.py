@@ -36,10 +36,32 @@ class Neo4jStore:
         with self.driver.session() as session:
             session.run(query).consume()
 
-    def add_entity(self, name, entity_type):
+    def add_entity(self, name, entity_type, document_id=None):
         query = """
         MERGE (e:Entity {name: $name})
+
+        ON CREATE SET
+            e.source_document_ids = [],
+            e.provenance_complete = true
+
+        ON MATCH SET
+            e.provenance_complete =
+                CASE
+                    WHEN e.source_document_ids IS NULL THEN false
+                    ELSE coalesce(e.provenance_complete, true)
+                END
+
         SET e.entity_type = $entity_type
+
+        SET e.source_document_ids =
+            CASE
+                WHEN $document_id IS NULL
+                    THEN coalesce(e.source_document_ids, [])
+                WHEN $document_id IN coalesce(e.source_document_ids, [])
+                    THEN coalesce(e.source_document_ids, [])
+                ELSE coalesce(e.source_document_ids, []) + $document_id
+            END
+
         RETURN e.name AS name
         """
 
@@ -47,7 +69,8 @@ class Neo4jStore:
             result = session.run(
                 query,
                 name=name,
-                entity_type=entity_type
+                entity_type=entity_type,
+                document_id=document_id
             )
 
             record = result.single()
@@ -64,13 +87,37 @@ class Neo4jStore:
         subject,
         predicate,
         object_name,
-        evidence=""
+        evidence="",
+        document_id=None
     ):
         query = """
         MATCH (s:Entity {name: $subject})
         MATCH (o:Entity {name: $object_name})
+
         MERGE (s)-[r:RELATED_TO {predicate: $predicate}]->(o)
+
+        ON CREATE SET
+            r.source_document_ids = [],
+            r.provenance_complete = true
+
+        ON MATCH SET
+            r.provenance_complete =
+                CASE
+                    WHEN r.source_document_ids IS NULL THEN false
+                    ELSE coalesce(r.provenance_complete, true)
+                END
+
         SET r.evidence = $evidence
+
+        SET r.source_document_ids =
+            CASE
+                WHEN $document_id IS NULL
+                    THEN coalesce(r.source_document_ids, [])
+                WHEN $document_id IN coalesce(r.source_document_ids, [])
+                    THEN coalesce(r.source_document_ids, [])
+                ELSE coalesce(r.source_document_ids, []) + $document_id
+            END
+
         RETURN s.name AS subject, o.name AS object
         """
 
@@ -80,7 +127,8 @@ class Neo4jStore:
                 subject=subject,
                 predicate=predicate,
                 object_name=object_name,
-                evidence=evidence
+                evidence=evidence,
+                document_id=document_id
             )
 
             record = result.single()
@@ -94,20 +142,25 @@ class Neo4jStore:
 
             return dict(record)
 
-    def store_graph(self, knowledge_graph):
+    def store_graph(self, knowledge_graph, document_id=None):
         graph = knowledge_graph.graph
 
         entity_count = 0
         relationship_count = 0
 
-        # Store all entities first
+        # Store entities first
         for name, attributes in graph.nodes(data=True):
             entity_type = attributes.get(
                 "entity_type",
                 attributes.get("label", "UNKNOWN")
             )
 
-            self.add_entity(name, entity_type)
+            self.add_entity(
+                name,
+                entity_type,
+                document_id=document_id
+            )
+
             entity_count += 1
 
         # Store relationships after entities
@@ -123,7 +176,8 @@ class Neo4jStore:
                 subject,
                 predicate,
                 object_name,
-                evidence
+                evidence,
+                document_id=document_id
             )
 
             relationship_count += 1
@@ -136,5 +190,82 @@ class Neo4jStore:
             "relationships_stored": relationship_count
         }
 
+    def delete_document_data(self, document_id):
+        """
+        Remove a document's provenance from the graph.
+
+        Delete only graph records whose provenance is complete
+        and which are no longer supported by another document.
+        Legacy records with unknown provenance are preserved.
+        """
+
+        def delete_data_transaction(tx):
+
+            relationship_result = tx.run(
+                """
+                MATCH ()-[r:RELATED_TO]->()
+                WHERE $document_id IN coalesce(
+                    r.source_document_ids, []
+                )
+
+                WITH r,
+                     [
+                         id IN coalesce(r.source_document_ids, [])
+                         WHERE id <> $document_id
+                     ] AS remaining
+
+                SET r.source_document_ids = remaining
+
+                WITH r, remaining
+                WHERE size(remaining) = 0
+                  AND coalesce(r.provenance_complete, false) = true
+
+                DELETE r
+                RETURN count(r) AS deleted_relationships
+                """,
+                document_id=document_id
+            ).single()
+
+            entity_result = tx.run(
+                """
+                MATCH (e:Entity)
+                WHERE $document_id IN coalesce(
+                    e.source_document_ids, []
+                )
+
+                WITH e,
+                     [
+                         id IN coalesce(e.source_document_ids, [])
+                         WHERE id <> $document_id
+                     ] AS remaining
+
+                SET e.source_document_ids = remaining
+
+                WITH e, remaining
+                OPTIONAL MATCH (e)-[r]-()
+
+                WITH e, remaining, count(r) AS degree
+
+                WHERE size(remaining) = 0
+                  AND degree = 0
+                  AND coalesce(e.provenance_complete, false) = true
+
+                DELETE e
+                RETURN count(e) AS deleted_entities
+                """,
+                document_id=document_id
+            ).single()
+
+            return {
+                "relationships_deleted":
+                    relationship_result["deleted_relationships"],
+                "entities_deleted":
+                    entity_result["deleted_entities"]
+            }
+
+        with self.driver.session() as session:
+            return session.execute_write(delete_data_transaction)
+
     def close(self):
         self.driver.close()
+

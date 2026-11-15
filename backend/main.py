@@ -1,5 +1,6 @@
-﻿import sys
-import uuid
+﻿
+import sys
+import hashlib
 import traceback
 from pathlib import Path
 from collections.abc import Mapping
@@ -19,7 +20,7 @@ from vector_store.chroma_store import ChromaVectorStore
 app = FastAPI(
     title="Enterprise Knowledge Graph Connector",
     description="Hybrid Graph RAG with enterprise document ingestion.",
-    version="1.3.0"
+    version="1.4.0"
 )
 
 pipeline = None
@@ -42,6 +43,24 @@ def get_pipeline():
         pipeline = EnterpriseRAGPipeline()
 
     return pipeline
+
+
+def generate_document_id(filename, content):
+    """
+    Generate a stable document ID.
+
+    The same filename and file content always produce
+    the same ID.
+    """
+
+    normalized_filename = Path(filename).name.lower()
+
+    hasher = hashlib.sha256()
+    hasher.update(normalized_filename.encode("utf-8"))
+    hasher.update(b"::")
+    hasher.update(content)
+
+    return hasher.hexdigest()
 
 
 @app.get("/")
@@ -75,8 +94,10 @@ def ask_question(request: QuestionRequest):
         }
 
     except ValueError as error:
-        traceback.print_exc()
-        raise HTTPException(status_code=400, detail=str(error))
+        raise HTTPException(
+            status_code=400,
+            detail=str(error)
+        )
 
     except Exception as error:
         print("\n========== COMPLETE ASK ERROR TRACEBACK ==========")
@@ -92,16 +113,17 @@ def ask_question(request: QuestionRequest):
 @app.post("/upload")
 async def upload_document(file: UploadFile = File(...)):
 
-    extension = Path(file.filename or "").suffix.lower()
+    original_filename = Path(
+        file.filename or "unknown"
+    ).name
+
+    extension = Path(original_filename).suffix.lower()
 
     if extension not in ALLOWED_EXTENSIONS:
         raise HTTPException(
             status_code=400,
             detail="Only PDF, DOCX, and TXT files are supported."
         )
-
-    document_id = str(uuid.uuid4())
-    file_path = RAW_DIR / f"{document_id}{extension}"
 
     try:
         content = await file.read()
@@ -117,6 +139,15 @@ async def upload_document(file: UploadFile = File(...)):
                 status_code=413,
                 detail="File size exceeds the 10 MB limit."
             )
+
+        # Stable ID prevents duplicate indexing of the
+        # same file uploaded repeatedly.
+        document_id = generate_document_id(
+            original_filename,
+            content
+        )
+
+        file_path = RAW_DIR / f"{document_id}{extension}"
 
         file_path.write_bytes(content)
 
@@ -151,13 +182,16 @@ async def upload_document(file: UploadFile = File(...)):
                     f"{type(chunk).__name__}"
                 )
 
-            if not isinstance(chunk_text, str) or not chunk_text.strip():
+            if (
+                not isinstance(chunk_text, str)
+                or not chunk_text.strip()
+            ):
                 continue
 
             metadata.update({
                 "document_id": document_id,
-                "original_filename": file.filename or "unknown",
-                "source": file.filename or "unknown"
+                "original_filename": original_filename,
+                "source": original_filename
             })
 
             indexed_chunks.append({
@@ -175,26 +209,38 @@ async def upload_document(file: UploadFile = File(...)):
             collection_name="enterprise_documents"
         )
 
-        vectors_added = vector_store.add_documents(indexed_chunks)
+        try:
+            vectors_added = vector_store.add_documents(
+                indexed_chunks
+            )
+        finally:
+            if hasattr(vector_store, "close"):
+                vector_store.close()
 
         graph_store = Neo4jStore()
 
         try:
             graph_store.verify_connection()
             graph_store.create_constraints()
-            graph_stats = graph_store.store_graph(knowledge_graph)
+
+            graph_stats = graph_store.store_graph(
+                knowledge_graph
+            )
+
         finally:
             graph_store.close()
 
         return {
             "message": "Document processed and indexed successfully.",
             "document_id": document_id,
-            "filename": file.filename,
+            "filename": original_filename,
             "chunks_created": len(indexed_chunks),
             "vectors_indexed": vectors_added,
+            "graph_storage": graph_stats,
             "entities_extracted": len(workflow_result["entities"]),
-            "relationships_extracted": len(workflow_result["relationships"]),
-            "graph_storage": graph_stats
+            "relationships_extracted": len(
+                workflow_result["relationships"]
+            )
         }
 
     except HTTPException:
@@ -218,4 +264,5 @@ def shutdown():
     if pipeline is not None:
         if hasattr(pipeline, "close"):
             pipeline.close()
+
         pipeline = None

@@ -20,7 +20,7 @@ from vector_store.chroma_store import ChromaVectorStore
 app = FastAPI(
     title="Enterprise Knowledge Graph Connector",
     description="Hybrid Graph RAG with enterprise document ingestion.",
-    version="1.4.0"
+    version="1.5.0"
 )
 
 pipeline = None
@@ -46,13 +46,6 @@ def get_pipeline():
 
 
 def generate_document_id(filename, content):
-    """
-    Generate a stable document ID.
-
-    The same filename and file content always produce
-    the same ID.
-    """
-
     normalized_filename = Path(filename).name.lower()
 
     hasher = hashlib.sha256()
@@ -94,15 +87,10 @@ def ask_question(request: QuestionRequest):
         }
 
     except ValueError as error:
-        raise HTTPException(
-            status_code=400,
-            detail=str(error)
-        )
+        raise HTTPException(status_code=400, detail=str(error))
 
     except Exception as error:
-        print("\n========== COMPLETE ASK ERROR TRACEBACK ==========")
         traceback.print_exc()
-        print("==================================================\n")
 
         raise HTTPException(
             status_code=500,
@@ -112,11 +100,7 @@ def ask_question(request: QuestionRequest):
 
 @app.post("/upload")
 async def upload_document(file: UploadFile = File(...)):
-
-    original_filename = Path(
-        file.filename or "unknown"
-    ).name
-
+    original_filename = Path(file.filename or "unknown").name
     extension = Path(original_filename).suffix.lower()
 
     if extension not in ALLOWED_EXTENSIONS:
@@ -140,15 +124,12 @@ async def upload_document(file: UploadFile = File(...)):
                 detail="File size exceeds the 10 MB limit."
             )
 
-        # Stable ID prevents duplicate indexing of the
-        # same file uploaded repeatedly.
         document_id = generate_document_id(
             original_filename,
             content
         )
 
         file_path = RAW_DIR / f"{document_id}{extension}"
-
         file_path.write_bytes(content)
 
         workflow_result = build_knowledge_graph_from_document(
@@ -161,7 +142,6 @@ async def upload_document(file: UploadFile = File(...)):
         indexed_chunks = []
 
         for index, chunk in enumerate(chunks):
-
             if isinstance(chunk, str):
                 chunk_text = chunk
                 metadata = {}
@@ -169,7 +149,6 @@ async def upload_document(file: UploadFile = File(...)):
             elif isinstance(chunk, Mapping):
                 chunk_text = chunk.get("text", "")
                 raw_metadata = chunk.get("metadata", {})
-
                 metadata = (
                     dict(raw_metadata)
                     if isinstance(raw_metadata, Mapping)
@@ -178,14 +157,10 @@ async def upload_document(file: UploadFile = File(...)):
 
             else:
                 raise TypeError(
-                    f"Unsupported chunk format at index {index}: "
-                    f"{type(chunk).__name__}"
+                    f"Unsupported chunk type: {type(chunk).__name__}"
                 )
 
-            if (
-                not isinstance(chunk_text, str)
-                or not chunk_text.strip()
-            ):
+            if not isinstance(chunk_text, str) or not chunk_text.strip():
                 continue
 
             metadata.update({
@@ -201,21 +176,16 @@ async def upload_document(file: UploadFile = File(...)):
             })
 
         if not indexed_chunks:
-            raise ValueError(
-                "No readable text chunks were extracted."
-            )
+            raise ValueError("No readable text chunks were extracted.")
 
         vector_store = ChromaVectorStore(
             collection_name="enterprise_documents"
         )
 
         try:
-            vectors_added = vector_store.add_documents(
-                indexed_chunks
-            )
+            vectors_added = vector_store.add_documents(indexed_chunks)
         finally:
-            if hasattr(vector_store, "close"):
-                vector_store.close()
+            vector_store.close()
 
         graph_store = Neo4jStore()
 
@@ -224,9 +194,9 @@ async def upload_document(file: UploadFile = File(...)):
             graph_store.create_constraints()
 
             graph_stats = graph_store.store_graph(
-                knowledge_graph
+                knowledge_graph,
+                document_id=document_id
             )
-
         finally:
             graph_store.close()
 
@@ -247,14 +217,113 @@ async def upload_document(file: UploadFile = File(...)):
         raise
 
     except Exception as error:
-        print("\n========== COMPLETE UPLOAD ERROR TRACEBACK ==========")
         traceback.print_exc()
-        print("======================================================\n")
 
         raise HTTPException(
             status_code=500,
             detail=f"Document processing failed: {error}"
         )
+
+
+@app.get("/documents")
+def list_documents():
+    vector_store = None
+
+    try:
+        vector_store = ChromaVectorStore(
+            collection_name="enterprise_documents"
+        )
+
+        documents = vector_store.list_documents()
+
+        return {
+            "total_documents": len(documents),
+            "documents": documents
+        }
+
+    except Exception as error:
+        traceback.print_exc()
+        raise HTTPException(
+            status_code=500,
+            detail=f"Could not list documents: {error}"
+        )
+
+    finally:
+        if vector_store is not None:
+            vector_store.close()
+
+
+@app.delete("/documents/{document_id}")
+def delete_document(document_id: str):
+    vector_store = None
+    graph_store = None
+
+    try:
+        vector_store = ChromaVectorStore(
+            collection_name="enterprise_documents"
+        )
+
+        documents = vector_store.list_documents()
+
+        document = next(
+            (
+                item for item in documents
+                if item["document_id"] == document_id
+            ),
+            None
+        )
+
+        if document is None:
+            raise HTTPException(
+                status_code=404,
+                detail="Document not found in the vector index."
+            )
+
+        # Remove graph provenance first. Neo4j preserves graph
+        # records that are still supported by other documents.
+        graph_store = Neo4jStore()
+        graph_store.verify_connection()
+
+        graph_result = graph_store.delete_document_data(document_id)
+
+        # Delete only this document's vector chunks.
+        chunks_deleted = vector_store.delete_document(document_id)
+
+        # Delete the stored original file after database cleanup.
+        deleted_files = []
+
+        for extension in ALLOWED_EXTENSIONS:
+            stored_file = RAW_DIR / f"{document_id}{extension}"
+
+            if stored_file.is_file():
+                stored_file.unlink()
+                deleted_files.append(stored_file.name)
+
+        return {
+            "message": "Document deleted successfully.",
+            "document_id": document_id,
+            "filename": document["filename"],
+            "chunks_deleted": chunks_deleted,
+            "graph_cleanup": graph_result,
+            "files_deleted": deleted_files
+        }
+
+    except HTTPException:
+        raise
+
+    except Exception as error:
+        traceback.print_exc()
+        raise HTTPException(
+            status_code=500,
+            detail=f"Document deletion failed: {error}"
+        )
+
+    finally:
+        if vector_store is not None:
+            vector_store.close()
+
+        if graph_store is not None:
+            graph_store.close()
 
 
 @app.on_event("shutdown")

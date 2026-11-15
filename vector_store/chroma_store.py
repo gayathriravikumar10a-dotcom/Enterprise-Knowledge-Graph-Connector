@@ -10,6 +10,7 @@ CHROMA_PATH = PROJECT_ROOT / "chroma_db"
 
 
 class ChromaVectorStore:
+
     def __init__(
         self,
         collection_name="enterprise_documents",
@@ -55,7 +56,6 @@ class ChromaVectorStore:
         metadatas = []
 
         for index, chunk in enumerate(chunks):
-
             if isinstance(chunk, str):
                 content = chunk.strip()
                 chunk_id = f"chunk_{index}"
@@ -133,18 +133,14 @@ class ChromaVectorStore:
         return retrieved
 
     def list_documents(self, batch_size=1000):
-        """
-        List uploaded documents by grouping their indexed chunks
-        using the document_id metadata.
-        """
+        if batch_size < 1:
+            raise ValueError("batch_size must be at least 1")
 
         documents = {}
-
         total_count = self.collection.count()
         offset = 0
 
         while offset < total_count:
-
             results = self.collection.get(
                 limit=batch_size,
                 offset=offset,
@@ -157,14 +153,10 @@ class ChromaVectorStore:
             if not ids:
                 break
 
-            for chunk_id, metadata in zip(ids, metadatas):
-
+            for metadata in metadatas:
                 metadata = metadata or {}
-
                 document_id = metadata.get("document_id")
 
-                # Ignore legacy chunks that were not uploaded
-                # through the document upload endpoint.
                 if not document_id:
                     continue
 
@@ -190,6 +182,22 @@ class ChromaVectorStore:
             key=lambda item: item["filename"].lower()
         )
 
+    def delete_document(self, document_id):
+        if not document_id or not document_id.strip():
+            raise ValueError("document_id cannot be empty")
+
+        results = self.collection.get(
+            where={"document_id": document_id},
+            include=["metadatas"]
+        )
+
+        chunk_ids = results.get("ids", [])
+
+        if chunk_ids:
+            self.collection.delete(ids=chunk_ids)
+
+        return len(chunk_ids)
+
     def count(self):
         return self.collection.count()
 
@@ -198,3 +206,7 @@ class ChromaVectorStore:
             name=self.collection.name
         )
 
+    def close(self):
+        self.collection = None
+        self.client = None
+        self.embedding_model = None

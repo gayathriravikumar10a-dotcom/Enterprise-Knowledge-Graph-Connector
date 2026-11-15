@@ -1,4 +1,5 @@
-﻿import spacy
+﻿
+import spacy
 
 
 def create_nlp_pipeline():
@@ -7,11 +8,18 @@ def create_nlp_pipeline():
     ruler = nlp.add_pipe("entity_ruler", before="ner")
 
     patterns = [
+        # Projects
         {"label": "PROJECT", "pattern": "Project Atlas"},
+
+        # Departments
         {"label": "DEPARTMENT", "pattern": "Artificial Intelligence"},
         {"label": "DEPARTMENT", "pattern": "Engineering"},
+
+        # Known people
+        {"label": "PERSON", "pattern": "Ravi Sharma"},
         {"label": "PERSON", "pattern": "Asha"},
         {"label": "PERSON", "pattern": "Ravi"},
+
     ]
 
     ruler.add_patterns(patterns)
@@ -39,3 +47,4 @@ def extract_entities(text: str) -> list:
         })
 
     return entities
+

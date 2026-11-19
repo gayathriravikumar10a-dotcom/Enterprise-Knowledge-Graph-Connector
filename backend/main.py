@@ -1,9 +1,8 @@
-﻿
+
 import sys
-import hashlib
 import traceback
 from pathlib import Path
-from collections.abc import Mapping
+from tempfile import TemporaryDirectory
 
 from fastapi import FastAPI, HTTPException, UploadFile, File
 from pydantic import BaseModel, Field
@@ -11,10 +10,12 @@ from pydantic import BaseModel, Field
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from rag.rag_pipeline import EnterpriseRAGPipeline
 from knowledge_graph.workflow import build_knowledge_graph_from_document
 from knowledge_graph.neo4j_store import Neo4jStore
 from vector_store.chroma_store import ChromaVectorStore
+from ingestion.pipeline import process_document
+from ingestion.document_manager import DocumentManager
+from ingestion.document_loader import SUPPORTED_EXTENSIONS, DEFAULT_MAX_FILE_SIZE
 
 
 app = FastAPI(
@@ -28,8 +29,13 @@ pipeline = None
 RAW_DIR = PROJECT_ROOT / "data" / "raw"
 RAW_DIR.mkdir(parents=True, exist_ok=True)
 
-ALLOWED_EXTENSIONS = {".pdf", ".docx", ".txt"}
-MAX_FILE_SIZE = 10 * 1024 * 1024
+ALLOWED_EXTENSIONS = SUPPORTED_EXTENSIONS
+MAX_FILE_SIZE = DEFAULT_MAX_FILE_SIZE
+CATALOG_PATH = PROJECT_ROOT / "data" / "processed" / "documents.sqlite3"
+
+
+def get_document_manager():
+    return DocumentManager(str(CATALOG_PATH))
 
 
 class QuestionRequest(BaseModel):
@@ -40,20 +46,10 @@ def get_pipeline():
     global pipeline
 
     if pipeline is None:
+        from rag.rag_pipeline import EnterpriseRAGPipeline
         pipeline = EnterpriseRAGPipeline()
 
     return pipeline
-
-
-def generate_document_id(filename, content):
-    normalized_filename = Path(filename).name.lower()
-
-    hasher = hashlib.sha256()
-    hasher.update(normalized_filename.encode("utf-8"))
-    hasher.update(b"::")
-    hasher.update(content)
-
-    return hasher.hexdigest()
 
 
 @app.get("/")
@@ -100,129 +96,93 @@ def ask_question(request: QuestionRequest):
 
 @app.post("/upload")
 async def upload_document(file: UploadFile = File(...)):
-    original_filename = Path(file.filename or "unknown").name
+    original_filename = Path((file.filename or "unknown").replace("\\", "/")).name
     extension = Path(original_filename).suffix.lower()
-
     if extension not in ALLOWED_EXTENSIONS:
-        raise HTTPException(
-            status_code=400,
-            detail="Only PDF, DOCX, and TXT files are supported."
-        )
+        raise HTTPException(status_code=400, detail="Only PDF, DOCX, and TXT files are supported.")
+
+    # Limit the read itself rather than buffering an arbitrarily large upload.
+    content = await file.read(MAX_FILE_SIZE + 1)
+    if not content:
+        raise HTTPException(status_code=400, detail="The uploaded file is empty.")
+    if len(content) > MAX_FILE_SIZE:
+        raise HTTPException(status_code=413, detail="File size exceeds the 10 MB limit.")
 
     try:
-        content = await file.read()
+        with TemporaryDirectory(dir=RAW_DIR) as temporary_dir:
+            temporary_path = Path(temporary_dir) / original_filename
+            temporary_path.write_bytes(content)
+            document = process_document(str(temporary_path), max_file_size=MAX_FILE_SIZE)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
 
-        if not content:
-            raise HTTPException(
-                status_code=400,
-                detail="The uploaded file is empty."
-            )
+    manager = get_document_manager()
+    document_id = document["metadata"]["document_id"]
+    try:
+        existing = manager.get_document(document_id)
+    except KeyError:
+        existing = None
+    if existing is not None and "indexing_result" in existing:
+        return {**existing["indexing_result"], "duplicate": True,
+                "message": "Document is already indexed."}
 
-        if len(content) > MAX_FILE_SIZE:
-            raise HTTPException(
-                status_code=413,
-                detail="File size exceeds the 10 MB limit."
-            )
-
-        document_id = generate_document_id(
-            original_filename,
-            content
-        )
-
-        file_path = RAW_DIR / f"{document_id}{extension}"
+    file_path = RAW_DIR / f"{document_id}{extension}"
+    vector_store = graph_store = None
+    vector_attempted = graph_attempted = False
+    try:
         file_path.write_bytes(content)
+        document["metadata"]["file_path"] = str(file_path.resolve())
+        for index, chunk in enumerate(document["chunks"]):
+            chunk["chunk_id"] = f"{document_id}_chunk_{index}"
+            chunk["metadata"].update(document["metadata"])
+            chunk["metadata"]["original_filename"] = original_filename
 
-        workflow_result = build_knowledge_graph_from_document(
-            str(file_path)
-        )
-
-        chunks = workflow_result["chunks"]
-        knowledge_graph = workflow_result["knowledge_graph"]
-
-        indexed_chunks = []
-
-        for index, chunk in enumerate(chunks):
-            if isinstance(chunk, str):
-                chunk_text = chunk
-                metadata = {}
-
-            elif isinstance(chunk, Mapping):
-                chunk_text = chunk.get("text", "")
-                raw_metadata = chunk.get("metadata", {})
-                metadata = (
-                    dict(raw_metadata)
-                    if isinstance(raw_metadata, Mapping)
-                    else {}
-                )
-
-            else:
-                raise TypeError(
-                    f"Unsupported chunk type: {type(chunk).__name__}"
-                )
-
-            if not isinstance(chunk_text, str) or not chunk_text.strip():
-                continue
-
-            metadata.update({
-                "document_id": document_id,
-                "original_filename": original_filename,
-                "source": original_filename
-            })
-
-            indexed_chunks.append({
-                "chunk_id": f"{document_id}_chunk_{index}",
-                "text": chunk_text.strip(),
-                "metadata": metadata
-            })
-
-        if not indexed_chunks:
-            raise ValueError("No readable text chunks were extracted.")
-
-        vector_store = ChromaVectorStore(
-            collection_name="enterprise_documents"
-        )
-
-        try:
-            vectors_added = vector_store.add_documents(indexed_chunks)
-        finally:
-            vector_store.close()
-
+        workflow_result = build_knowledge_graph_from_document(str(file_path))
+        vector_store = ChromaVectorStore(collection_name="enterprise_documents")
+        vector_attempted = True
+        vectors_added = vector_store.add_documents(document["chunks"])
         graph_store = Neo4jStore()
-
-        try:
-            graph_store.verify_connection()
-            graph_store.create_constraints()
-
-            graph_stats = graph_store.store_graph(
-                knowledge_graph,
-                document_id=document_id
-            )
-        finally:
-            graph_store.close()
-
-        return {
+        graph_store.verify_connection()
+        graph_store.create_constraints()
+        graph_attempted = True
+        graph_stats = graph_store.store_graph(workflow_result["knowledge_graph"], document_id=document_id)
+        response = {
             "message": "Document processed and indexed successfully.",
             "document_id": document_id,
             "filename": original_filename,
-            "chunks_created": len(indexed_chunks),
+            "chunks_created": document["total_chunks"],
             "vectors_indexed": vectors_added,
             "graph_storage": graph_stats,
             "entities_extracted": len(workflow_result["entities"]),
-            "relationships_extracted": len(
-                workflow_result["relationships"]
-            )
+            "relationships_extracted": len(workflow_result["relationships"]),
+            "duplicate": False,
         }
-
-    except HTTPException:
-        raise
-
+        document["indexing_result"] = response
+        manager.register(document, replace=existing is not None)
+        return response
     except Exception as error:
-        traceback.print_exc()
-
-        raise HTTPException(
-            status_code=500,
-            detail=f"Document processing failed: {error}"
-        )
+        # Best-effort compensation: never publish failed indexing in the catalog.
+        cleanup_errors = []
+        for store, attempted, operation in [
+            (graph_store, graph_attempted, "delete_document_data"),
+            (vector_store, vector_attempted, "delete_document"),
+        ]:
+            if attempted:
+                try:
+                    getattr(store, operation)(document_id)
+                except Exception as cleanup_error:
+                    cleanup_errors.append(str(cleanup_error))
+        if not cleanup_errors:
+            file_path.unlink(missing_ok=True)
+        detail = f"Document processing failed: {error}"
+        if cleanup_errors:
+            detail += f"; cleanup incomplete for {document_id}: {cleanup_errors}"
+        raise HTTPException(status_code=500, detail=detail) from error
+    finally:
+        if vector_store is not None:
+            vector_store.close()
+        if graph_store is not None:
+            graph_store.close()
 
 
 @app.get("/documents")
@@ -235,6 +195,13 @@ def list_documents():
         )
 
         documents = vector_store.list_documents()
+        manager = get_document_manager()
+        for document in documents:
+            try:
+                record = manager.get_document(document["document_id"])
+            except KeyError:
+                continue  # Older uploads have no catalog entry.
+            document["metadata"] = record["metadata"]
 
         return {
             "total_documents": len(documents),
@@ -274,10 +241,12 @@ def delete_document(document_id: str):
         )
 
         if document is None:
-            raise HTTPException(
-                status_code=404,
-                detail="Document not found in the vector index."
-            )
+            # Allow cleanup retries if vector removal succeeded previously.
+            try:
+                record = get_document_manager().get_document(document_id)
+                document = {"filename": record["metadata"]["source"]}
+            except KeyError:
+                raise HTTPException(status_code=404, detail="Document not found.")
 
         # Remove graph provenance first. Neo4j preserves graph
         # records that are still supported by other documents.
@@ -298,6 +267,8 @@ def delete_document(document_id: str):
             if stored_file.is_file():
                 stored_file.unlink()
                 deleted_files.append(stored_file.name)
+
+        get_document_manager().delete_document(document_id)
 
         return {
             "message": "Document deleted successfully.",
@@ -360,7 +331,7 @@ async def update_document(
             vector_store.close()
 
     # Only allow replacement using the same filename.
-    new_filename = Path(file.filename or "unknown").name
+    new_filename = Path((file.filename or "unknown").replace("\\", "/")).name
 
     if new_filename.casefold() != existing_document["filename"].casefold():
         raise HTTPException(
@@ -380,6 +351,9 @@ async def update_document(
             "document_id": document_id,
             "filename": new_filename
         }
+
+    if new_document["duplicate"] and new_document["filename"].casefold() != new_filename.casefold():
+        raise HTTPException(status_code=409, detail="Replacement content belongs to another document.")
 
     # Remove the old version only after successful indexing.
     try:

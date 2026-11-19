@@ -11,3 +11,5 @@ google-generativeai
 fastapi
 uvicorn
 streamlit
+
+python-multipart

@@ -22,11 +22,21 @@ def clean_text(text: str) -> str:
 
 
 def load_pdf(file_path: Path) -> str:
-    """Extract selectable text; scanned images require a separate OCR stage."""
-    with pymupdf.open(file_path) as pdf:
+    """Extract selectable PDF text without locking the source file."""
+    pdf_bytes = file_path.read_bytes()
+
+    with pymupdf.open(
+        stream=pdf_bytes,
+        filetype="pdf"
+    ) as pdf:
         if pdf.needs_pass:
-            raise ValueError("Password-protected PDFs are not supported")
-        return "\n".join(page.get_text() for page in pdf)
+            raise ValueError(
+                "Password-protected PDFs are not supported"
+            )
+
+        return "\n".join(
+            page.get_text() for page in pdf
+        )
 
 
 def load_docx(file_path: Path) -> str:

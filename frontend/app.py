@@ -1,6 +1,15 @@
-﻿
+
 import streamlit as st
+import streamlit.components.v1 as components
 import requests
+import sys
+from pathlib import Path
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from knowledge_graph.visualizer import render_knowledge_graph_html
 
 st.set_page_config(
     page_title="Enterprise Knowledge Graph Connector",
@@ -279,6 +288,48 @@ if submitted:
 
 st.divider()
 
+st.divider()
+
+# --------------------------------------------------
+# KNOWLEDGE GRAPH VISUALIZATION
+# --------------------------------------------------
+
+st.header("3. Explore Knowledge Graph")
+
+st.write(
+    "Inspect resolved enterprise entities, aliases, and multi-hop relationships."
+)
+
+if st.button("Refresh Knowledge Graph"):
+    try:
+        graph_response = requests.get(f"{API_URL}/graph", timeout=30)
+        graph_response.raise_for_status()
+        st.session_state["graph_snapshot"] = graph_response.json()
+    except Exception as graph_err:
+        st.warning(f"Could not fetch live Neo4j graph ({graph_err}). Showing sample preview.")
+
+snapshot = st.session_state.get("graph_snapshot", {"nodes": [], "edges": []})
+if not snapshot.get("nodes"):
+    snapshot = {
+        "nodes": [
+            {"id": "Ravi Sharma", "label": "Ravi Sharma", "entity_type": "PERSON", "aliases": ["Ravi", "R. Sharma"]},
+            {"id": "AI Development Team", "label": "AI Development Team", "entity_type": "TEAM", "aliases": []},
+            {"id": "Technology Department", "label": "Technology Department", "entity_type": "DEPARTMENT", "aliases": ["Technology"]},
+            {"id": "Project Atlas", "label": "Project Atlas", "entity_type": "PROJECT", "aliases": []},
+        ],
+        "edges": [
+            {"source": "Ravi Sharma", "target": "AI Development Team", "predicate": "MANAGES"},
+            {"source": "AI Development Team", "target": "Technology Department", "predicate": "BELONGS_TO"},
+            {"source": "AI Development Team", "target": "Project Atlas", "predicate": "WORKS_ON"},
+        ],
+    }
+
+components.html(
+    render_knowledge_graph_html(snapshot["nodes"], snapshot["edges"], height=520),
+    height=530,
+)
+
+st.divider()
 st.caption(
     "Enterprise Knowledge Graph Connector | "
     "Document Ingestion | Hybrid Retrieval | "

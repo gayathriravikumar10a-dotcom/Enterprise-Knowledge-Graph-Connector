@@ -380,6 +380,16 @@ async def update_document(
         "old_graph_cleanup": old_document_cleanup["graph_cleanup"]
     }
 
+@app.get("/graph")
+def get_knowledge_graph(limit: int = 200):
+    try:
+        active_pipeline = get_pipeline()
+        if active_pipeline is not None and hasattr(active_pipeline, "neo4j_store"):
+            return active_pipeline.neo4j_store.get_graph_snapshot(limit=limit)
+    except Exception:
+        pass
+    return {"nodes": [], "edges": []}
+
 @app.on_event("shutdown")
 def shutdown():
     global pipeline

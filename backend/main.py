@@ -1,4 +1,4 @@
-
+﻿
 import sys
 import traceback
 from pathlib import Path
@@ -384,11 +384,22 @@ async def update_document(
 def get_knowledge_graph(limit: int = 200):
     try:
         active_pipeline = get_pipeline()
-        if active_pipeline is not None and hasattr(active_pipeline, "neo4j_store"):
-            return active_pipeline.neo4j_store.get_graph_snapshot(limit=limit)
-    except Exception:
-        pass
-    return {"nodes": [], "edges": []}
+
+        if active_pipeline is None:
+            return {"nodes": [], "edges": []}
+
+        graph_store = active_pipeline.retriever.graph_store
+        graph_store.verify_connection()
+
+        return graph_store.get_graph_snapshot(limit=limit)
+
+    except Exception as exc:
+        from fastapi import HTTPException
+
+        raise HTTPException(
+            status_code=503,
+            detail=f"Unable to retrieve knowledge graph: {exc}"
+        ) from exc
 
 @app.on_event("shutdown")
 def shutdown():

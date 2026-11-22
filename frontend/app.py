@@ -302,37 +302,59 @@ st.write(
 
 if st.button("Refresh Knowledge Graph"):
     try:
-        graph_response = requests.get(f"{API_URL}/graph", timeout=30)
+        graph_response = requests.get(
+            f"{API_URL}/graph",
+            timeout=30
+        )
         graph_response.raise_for_status()
-        st.session_state["graph_snapshot"] = graph_response.json()
+
+        graph_data = graph_response.json()
+
+        if not isinstance(graph_data, dict):
+            raise ValueError("Invalid graph response format.")
+
+        if "nodes" not in graph_data or "edges" not in graph_data:
+            raise ValueError("Graph response is missing nodes or edges.")
+
+        st.session_state["graph_snapshot"] = graph_data
+        st.session_state["graph_error"] = None
+
     except Exception as graph_err:
-        st.warning(f"Could not fetch live Neo4j graph ({graph_err}). Showing sample preview.")
+        st.session_state["graph_error"] = str(graph_err)
 
-snapshot = st.session_state.get("graph_snapshot", {"nodes": [], "edges": []})
-if not snapshot.get("nodes"):
-    snapshot = {
-        "nodes": [
-            {"id": "Ravi Sharma", "label": "Ravi Sharma", "entity_type": "PERSON", "aliases": ["Ravi", "R. Sharma"]},
-            {"id": "AI Development Team", "label": "AI Development Team", "entity_type": "TEAM", "aliases": []},
-            {"id": "Technology Department", "label": "Technology Department", "entity_type": "DEPARTMENT", "aliases": ["Technology"]},
-            {"id": "Project Atlas", "label": "Project Atlas", "entity_type": "PROJECT", "aliases": []},
-        ],
-        "edges": [
-            {"source": "Ravi Sharma", "target": "AI Development Team", "predicate": "MANAGES"},
-            {"source": "AI Development Team", "target": "Technology Department", "predicate": "BELONGS_TO"},
-            {"source": "AI Development Team", "target": "Project Atlas", "predicate": "WORKS_ON"},
-        ],
-    }
-
-components.html(
-    render_knowledge_graph_html(snapshot["nodes"], snapshot["edges"], height=520),
-    height=530,
+snapshot = st.session_state.get(
+    "graph_snapshot",
+    {"nodes": [], "edges": []}
 )
 
-st.divider()
-st.caption(
-    "Enterprise Knowledge Graph Connector | "
-    "Document Ingestion | Hybrid Retrieval | "
-    "Knowledge Graph | Grounded Generation"
-)
+if st.session_state.get("graph_error"):
+    st.error(
+        f"Unable to load live Neo4j graph: "
+        f"{st.session_state['graph_error']}"
+    )
 
+elif not snapshot.get("nodes"):
+    st.info(
+        "No graph data is currently available. "
+        "Upload and index a document, then refresh."
+    )
+
+else:
+    col1, col2 = st.columns(2)
+
+    with col1:
+        st.metric("Graph Entities", len(snapshot["nodes"]))
+
+    with col2:
+        st.metric("Graph Relationships", len(snapshot["edges"]))
+
+    st.success("Live Neo4j graph data loaded successfully.")
+
+    components.html(
+        render_knowledge_graph_html(
+            snapshot["nodes"],
+            snapshot["edges"],
+            height=520
+        ),
+        height=530,
+    )

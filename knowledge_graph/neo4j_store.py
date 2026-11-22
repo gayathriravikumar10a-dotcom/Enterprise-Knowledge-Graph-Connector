@@ -1,4 +1,4 @@
-﻿import os
+import os
 from dotenv import load_dotenv
 from neo4j import GraphDatabase
 
@@ -36,12 +36,18 @@ class Neo4jStore:
         with self.driver.session() as session:
             session.run(query).consume()
 
-    def add_entity(self, name, entity_type, document_id=None):
+    def add_entity(self, name, entity_type, document_id=None, aliases=None):
+        clean_aliases = sorted({
+            a.strip() for a in (aliases or [])
+            if a and a.strip() and a.strip() != name
+        })
+
         query = """
         MERGE (e:Entity {name: $name})
 
         ON CREATE SET
             e.source_document_ids = [],
+            e.aliases = [],
             e.provenance_complete = true
 
         ON MATCH SET
@@ -52,6 +58,12 @@ class Neo4jStore:
                 END
 
         SET e.entity_type = $entity_type
+
+        SET e.aliases = reduce(
+            acc = coalesce(e.aliases, []),
+            alias IN $aliases |
+            CASE WHEN alias IN acc THEN acc ELSE acc + alias END
+        )
 
         SET e.source_document_ids =
             CASE
@@ -70,7 +82,8 @@ class Neo4jStore:
                 query,
                 name=name,
                 entity_type=entity_type,
-                document_id=document_id
+                document_id=document_id,
+                aliases=clean_aliases,
             )
 
             record = result.single()
@@ -81,6 +94,50 @@ class Neo4jStore:
                 )
 
             return record["name"]
+
+    def find_entity_by_name_or_alias(self, query_name: str) -> dict | None:
+        """Find a canonical Entity node matching either e.name or an entry in e.aliases."""
+        query = """
+        MATCH (e:Entity)
+        WHERE toLower(e.name) = toLower($q)
+           OR any(a IN coalesce(e.aliases, []) WHERE toLower(a) = toLower($q))
+        RETURN e.name AS name,
+               e.entity_type AS entity_type,
+               coalesce(e.aliases, []) AS aliases
+        LIMIT 1
+        """
+        with self.driver.session() as session:
+            record = session.run(query, q=query_name.strip()).single()
+            return dict(record) if record is not None else None
+
+    def get_graph_snapshot(self, limit: int = 200) -> dict:
+        """Return nodes and relationships stored in Neo4j for visualization and inspection."""
+        query = """
+        MATCH (e:Entity)
+        WITH e LIMIT $limit
+        WITH collect({
+            id: e.name,
+            label: e.name,
+            entity_type: coalesce(e.entity_type, 'UNKNOWN'),
+            aliases: coalesce(e.aliases, [])
+        }) AS nodes
+        OPTIONAL MATCH (s:Entity)-[r:RELATED_TO]->(o:Entity)
+        WITH nodes, collect({
+            source: s.name,
+            target: o.name,
+            predicate: coalesce(r.predicate, 'RELATED_TO'),
+            evidence: coalesce(r.evidence, '')
+        }) AS raw_edges
+        RETURN nodes, [edge IN raw_edges WHERE edge.source IS NOT NULL] AS edges
+        """
+        with self.driver.session() as session:
+            record = session.run(query, limit=limit).single()
+            if record is None:
+                return {"nodes": [], "edges": []}
+            return {
+                "nodes": record["nodes"],
+                "edges": record["edges"],
+            }
 
     def add_relationship(
         self,
@@ -148,22 +205,22 @@ class Neo4jStore:
         entity_count = 0
         relationship_count = 0
 
-        # Store entities first
         for name, attributes in graph.nodes(data=True):
             entity_type = attributes.get(
                 "entity_type",
                 attributes.get("label", "UNKNOWN")
             )
+            aliases = attributes.get("aliases", [])
 
             self.add_entity(
                 name,
                 entity_type,
-                document_id=document_id
+                document_id=document_id,
+                aliases=aliases,
             )
 
             entity_count += 1
 
-        # Store relationships after entities
         for subject, object_name, attributes in graph.edges(data=True):
             predicate = attributes.get(
                 "relation",
@@ -268,4 +325,3 @@ class Neo4jStore:
 
     def close(self):
         self.driver.close()
-

@@ -42,3 +42,26 @@ def test_unrelated_sentence():
     text = "The weather is sunny today."
 
     assert extract_relationships(text) == []
+def test_extract_passive_and_team_relationships():
+    from extraction.entity_extractor import register_entity_patterns
+
+    register_entity_patterns([
+        {"label": "TEAM", "pattern": "AI Development Team"},
+        {"label": "DEPARTMENT", "pattern": "Technology Department"},
+        {"label": "PROJECT", "pattern": "Project Alpha"},
+    ])
+
+    text = (
+        "Gagan works in the AI Development Team. "
+        "The AI Development Team belongs to the Technology Department "
+        "and works on Project Alpha. "
+        "Project Atlas is managed by Ravi."
+    )
+
+    relationships = extract_relationships(text)
+    triples = {(r["subject"], r["predicate"], r["object"]) for r in relationships}
+
+    assert ("Gagan", "BELONGS_TO", "AI Development Team") in triples
+    assert ("AI Development Team", "BELONGS_TO", "Technology Department") in triples
+    assert ("AI Development Team", "WORKS_ON", "Project Alpha") in triples
+    assert ("Ravi", "MANAGES", "Project Atlas") in triples

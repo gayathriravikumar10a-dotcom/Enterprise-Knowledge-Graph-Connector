@@ -1,6 +1,15 @@
-﻿
+
 import streamlit as st
+import streamlit.components.v1 as components
 import requests
+import sys
+from pathlib import Path
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from knowledge_graph.visualizer import render_knowledge_graph_html
 
 st.set_page_config(
     page_title="Enterprise Knowledge Graph Connector",
@@ -279,9 +288,73 @@ if submitted:
 
 st.divider()
 
-st.caption(
-    "Enterprise Knowledge Graph Connector | "
-    "Document Ingestion | Hybrid Retrieval | "
-    "Knowledge Graph | Grounded Generation"
+st.divider()
+
+# --------------------------------------------------
+# KNOWLEDGE GRAPH VISUALIZATION
+# --------------------------------------------------
+
+st.header("3. Explore Knowledge Graph")
+
+st.write(
+    "Inspect resolved enterprise entities, aliases, and multi-hop relationships."
 )
 
+if st.button("Refresh Knowledge Graph"):
+    try:
+        graph_response = requests.get(
+            f"{API_URL}/graph",
+            timeout=30
+        )
+        graph_response.raise_for_status()
+
+        graph_data = graph_response.json()
+
+        if not isinstance(graph_data, dict):
+            raise ValueError("Invalid graph response format.")
+
+        if "nodes" not in graph_data or "edges" not in graph_data:
+            raise ValueError("Graph response is missing nodes or edges.")
+
+        st.session_state["graph_snapshot"] = graph_data
+        st.session_state["graph_error"] = None
+
+    except Exception as graph_err:
+        st.session_state["graph_error"] = str(graph_err)
+
+snapshot = st.session_state.get(
+    "graph_snapshot",
+    {"nodes": [], "edges": []}
+)
+
+if st.session_state.get("graph_error"):
+    st.error(
+        f"Unable to load live Neo4j graph: "
+        f"{st.session_state['graph_error']}"
+    )
+
+elif not snapshot.get("nodes"):
+    st.info(
+        "No graph data is currently available. "
+        "Upload and index a document, then refresh."
+    )
+
+else:
+    col1, col2 = st.columns(2)
+
+    with col1:
+        st.metric("Graph Entities", len(snapshot["nodes"]))
+
+    with col2:
+        st.metric("Graph Relationships", len(snapshot["edges"]))
+
+    st.success("Live Neo4j graph data loaded successfully.")
+
+    components.html(
+        render_knowledge_graph_html(
+            snapshot["nodes"],
+            snapshot["edges"],
+            height=520
+        ),
+        height=530,
+    )

@@ -1,658 +1,179 @@
-\# Enterprise Knowledge Graph Connector
+# Enterprise Knowledge Graph Connector
 
+An AI-powered enterprise knowledge management system that combines Retrieval-Augmented Generation (RAG), knowledge graphs, and hybrid retrieval to answer questions from uploaded enterprise documents with supporting evidence.
 
+## Features
 
-An AI-powered enterprise document intelligence system that combines \*\*Retrieval-Augmented Generation (RAG), Knowledge Graphs, Vector Search, and Large Language Models\*\* to retrieve connected information from enterprise documents and generate evidence-grounded answers.
+- **Document ingestion:** Upload PDF, DOCX, and TXT documents.
+- **Document management:** List, update, and delete uploaded documents.
+- **Text preprocessing:** Clean and normalize extracted document content.
+- **Chunking and embeddings:** Split documents into chunks and generate vector embeddings.
+- **Hybrid retrieval:** Combine ChromaDB vector retrieval with Neo4j knowledge graph information.
+- **Entity extraction:** Identify people, projects, departments, and other enterprise entities.
+- **Entity resolution:** Resolve aliases and merge references to the same entity.
+- **Relationship extraction:** Identify relationships such as `WORKS_ON`, `MANAGES`, `BELONGS_TO`, and `OWNS`.
+- **Graph reasoning:** Support multi-hop reasoning over connected entities.
+- **Grounded question answering:** Generate answers using retrieved evidence.
+- **Knowledge graph visualization:** Explore entities and relationships through the Streamlit interface.
+- **Evaluation:** Evaluate retrieval, extraction, grounding, and application workflows.
 
-
-
-\## Project Overview
-
-
-
-Enterprise organizations store valuable information across PDFs, Word documents, and text files. Traditional keyword-based search often struggles to understand relationships between employees, departments, projects, and business processes.
-
-
-
-The Enterprise Knowledge Graph Connector addresses this challenge through a hybrid Graph RAG architecture that combines semantic document retrieval with knowledge graph relationships.
-
-
-
-Users can upload documents, ask natural-language questions, and receive answers supported by retrieved document and graph evidence.
-
-
-
-\## Key Features
-
-
-
-\- \*\*Multi-format document ingestion:\*\* Supports PDF, DOCX, and TXT files.
-
-\- \*\*Text preprocessing and chunking:\*\* Splits documents into manageable chunks with metadata.
-
-\- \*\*Named Entity Recognition:\*\* Extracts entities using spaCy.
-
-\- \*\*Relationship extraction:\*\* Identifies relationships using rule-based patterns and dependency parsing.
-
-\- \*\*Knowledge graph construction:\*\* Represents entities and relationships using NetworkX.
-
-\- \*\*Graph database storage:\*\* Stores knowledge graph data in Neo4j.
-
-\- \*\*Vector database:\*\* Stores document embeddings in ChromaDB.
-
-\- \*\*Semantic search:\*\* Uses Sentence Transformers for embeddings and cosine similarity for retrieval.
-
-\- \*\*Hybrid retrieval:\*\* Combines graph-based evidence with vector search results.
-
-\- \*\*Grounded answer generation:\*\* Uses Gemini to generate answers based on retrieved evidence.
-
-\- \*\*Grounding evaluation:\*\* Checks whether generated answers are supported by retrieved evidence using a lexical-overlap heuristic.
-
-\- \*\*REST API:\*\* Provides document upload and question-answering endpoints using FastAPI.
-
-\- \*\*Interactive frontend:\*\* Provides document upload and question-answering functionality through Streamlit.
-
-
-
-\## Technology Stack
-
-
+## Technology Stack
 
 | Component | Technology |
-
 |---|---|
-
-| Programming language | Python |
-
-| NLP and entity extraction | spaCy |
-
-| Relationship extraction | Regex and dependency parsing |
-
-| Graph representation | NetworkX |
-
-| Graph database | Neo4j |
-
-| Embedding model | Sentence Transformers (`all-MiniLM-L6-v2`) |
-
-| Vector database | ChromaDB |
-
-| Similarity search | Cosine similarity |
-
-| LLM | Google Gemini |
-
-| RAG architecture | Hybrid Graph RAG |
-
-| Backend | FastAPI |
-
+| Backend API | FastAPI |
 | Frontend | Streamlit |
+| Language | Python |
+| Language processing | spaCy |
+| Vector database | ChromaDB |
+| Graph database | Neo4j |
+| Embedding model | sentence-transformers |
+| LLM | Google Gemini |
+| Testing | pytest |
 
-| Testing | Pytest |
+## System Architecture
 
+The system follows a hybrid Graph RAG architecture.
 
+1. Users upload enterprise documents through the frontend.
+2. The backend extracts, cleans, and chunks document content.
+3. Text chunks are embedded and stored in ChromaDB.
+4. Entity and relationship information is extracted and stored in Neo4j.
+5. User questions are processed through hybrid retrieval.
+6. Retrieved vector and graph evidence is used to generate grounded answers.
+7. The frontend displays answers, document information, and knowledge graph visualizations.
 
-\## System Architecture
-
-
+## Project Structure
 
 ```text
-
-&#x20;                USER
-
-&#x20;                  |
-
-&#x20;                  v
-
-&#x20;          STREAMLIT FRONTEND
-
-&#x20;                  |
-
-&#x20;                  v
-
-&#x20;            FASTAPI BACKEND
-
-&#x20;                  |
-
-&#x20;         +--------+--------+
-
-&#x20;         |                 |
-
-&#x20;         v                 v
-
-&#x20;   DOCUMENT UPLOAD     USER QUESTION
-
-&#x20;         |                 |
-
-&#x20;         v                 v
-
-&#x20;   DOCUMENT LOADER    HYBRID RETRIEVER
-
-&#x20;         |                 |
-
-&#x20;         v           +-----+------+
-
-&#x20;   TEXT CHUNKING      |            |
-
-&#x20;         |            v            v
-
-&#x20;         v       VECTOR SEARCH  GRAPH SEARCH
-
-&#x20;   ENTITY AND          |            |
-
-&#x20;   RELATIONSHIP        v            v
-
-&#x20;   EXTRACTION       CHROMADB      NEO4J
-
-&#x20;         |            |            |
-
-&#x20;         v            +-----+------+
-
-&#x20;   KNOWLEDGE GRAPH          |
-
-&#x20;         |                  v
-
-&#x20;         v             RETRIEVED
-
-&#x20;       NEO4J             EVIDENCE
-
-&#x20;                            |
-
-&#x20;                            v
-
-&#x20;                      GEMINI LLM
-
-&#x20;                            |
-
-&#x20;                            v
-
-&#x20;                    GROUNDED ANSWER
-
-&#x20;                            |
-
-&#x20;                            v
-
-&#x20;                   GROUNDING CHECK
-
-&#x20;                            |
-
-&#x20;                            v
-
-&#x20;                         USER
-
+Enterprise-Knowledge-Graph-Connector/
+│
+├── backend/
+│   └── main.py
+├── frontend/
+│   └── app.py
+├── ingestion/
+├── retrieval/
+├── extraction/
+├── knowledge_graph/
+├── vector_store/
+├── evaluation/
+├── tests/
+├── README.md
+└── requirements.txt
 ```
 
+## Setup and Installation
 
-
-\## Project Workflow
-
-
-
-\### 1. Document Ingestion
-
-
-
-The system accepts PDF, DOCX, and TXT documents and extracts their text and metadata.
-
-
-
-\### 2. Text Preprocessing
-
-
-
-Extracted text is cleaned and divided into smaller overlapping chunks for efficient retrieval.
-
-
-
-\### 3. Entity Extraction
-
-
-
-spaCy identifies relevant entities such as people, projects, and departments.
-
-
-
-\### 4. Relationship Extraction
-
-
-
-Rule-based patterns and dependency parsing identify relationships such as:
-
-
-
-\- WORKS\_ON
-
-\- MANAGES
-
-\- BELONGS\_TO
-
-
-
-\### 5. Knowledge Graph Construction
-
-
-
-Extracted entities and relationships are represented as a graph using NetworkX and persisted in Neo4j.
-
-
-
-\### 6. Vector Indexing
-
-
-
-Sentence Transformers generates embeddings for document chunks, which are stored in ChromaDB.
-
-
-
-\### 7. Hybrid Retrieval
-
-
-
-The retriever combines:
-
-\- Semantic similarity search from ChromaDB.
-
-\- Relationship-based graph retrieval from Neo4j.
-
-
-
-\### 8. Answer Generation
-
-
-
-Retrieved evidence is passed to Gemini, which generates an answer constrained by the available context.
-
-
-
-\### 9. Grounding Evaluation
-
-
-
-A lexical-overlap-based evaluator checks whether the answer is supported by retrieved evidence. The current evaluator is a heuristic and does not establish full semantic entailment.
-
-
-
-\## Installation and Setup
-
-
-
-\### Prerequisites
-
-
-
-\- Python 3.11
-
-\- Git
-
-\- Neo4j Desktop or a reachable Neo4j instance
-
-\- Google Gemini API key
-
-
-
-\### 1. Clone the repository
-
-
+### 1. Clone the repository
 
 ```bash
-
 git clone https://github.com/gayathriravikumar10a-dotcom/Enterprise-Knowledge-Graph-Connector.git
-
-
-
 cd Enterprise-Knowledge-Graph-Connector
-
 ```
 
+### 2. Create and activate a virtual environment
 
-
-\### 2. Create a virtual environment
-
-
-
-```powershell
-
+```bash
 python -m venv venv
-
-
-
-.\\venv\\Scripts\\Activate.ps1
-
 ```
 
+Windows PowerShell:
 
+```powershell
+.\venv\Scripts\Activate.ps1
+```
 
-\### 3. Install dependencies
-
-
+### 3. Install dependencies
 
 ```bash
-
 pip install -r requirements.txt
-
 ```
 
+### 4. Configure environment variables
 
+Configure the required Gemini API key and Neo4j connection settings in your local environment according to the application's configuration.
 
-\### 4. Download the spaCy model
+Do not commit API keys, passwords, or other secrets to GitHub.
 
-
+### 5. Start the backend
 
 ```bash
-
-python -m spacy download en\_core\_web\_sm
-
-```
-
-
-
-\### 5. Configure environment variables
-
-
-
-Create a `.env` file in the project root using `.env.example` as a template.
-
-
-
-Configure your own credentials:
-
-
-
-```env
-
-GEMINI\_API\_KEY=your\_gemini\_api\_key
-
-GEMINI\_MODEL=gemini-3.5-flash
-
-
-
-NEO4J\_URI=bolt://localhost:7687
-
-NEO4J\_USERNAME=neo4j
-
-NEO4J\_PASSWORD=your\_neo4j\_password
-
-```
-
-
-
-Never commit your actual `.env` file or API credentials to GitHub.
-
-
-
-\### 6. Start Neo4j
-
-
-
-Start your Neo4j database and verify that the connection settings match your `.env` configuration.
-
-
-
-\## Running the Application
-
-
-
-Open two PowerShell terminals from the project root.
-
-
-
-\### Terminal 1 — Start FastAPI
-
-
-
-```powershell
-
-.\\venv\\Scripts\\Activate.ps1
-
-
-
 uvicorn backend.main:app --reload
-
 ```
 
+### 6. Start the frontend
 
+In another terminal:
 
-API documentation:
-
-
-
-http://127.0.0.1:8000/docs
-
-
-
-\### Terminal 2 — Start Streamlit
-
-
-
-```powershell
-
-.\\venv\\Scripts\\Activate.ps1
-
-
-
+```bash
 streamlit run frontend/app.py
-
 ```
 
-
-
-Open the local Streamlit URL displayed in your terminal.
-
-
-
-\## API Endpoints
-
-
+## API Endpoints
 
 | Method | Endpoint | Description |
-
 |---|---|---|
-
 | GET | `/` | Root endpoint |
-
 | GET | `/health` | Health check |
+| POST | `/upload` | Upload a document |
+| GET | `/documents` | List uploaded documents |
+| PUT | `/documents/{document_id}` | Update a document |
+| DELETE | `/documents/{document_id}` | Delete a document |
+| POST | `/ask` | Ask a question |
+| GET | `/graph` | Retrieve knowledge graph data |
 
-| POST | `/upload` | Upload and process a document |
-
-| POST | `/ask` | Ask a question using hybrid retrieval and RAG |
-
-
-
-Interactive API documentation is available at `/docs` when the backend is running.
-
-
-
-\## Example Use Case
-
-
-
-\*\*Sample document information:\*\*
-
-
-
-\- Ravi manages Project Atlas.
-
-\- Asha works on Project Atlas.
-
-\- Project Atlas is an enterprise AI knowledge management initiative.
-
-
-
-\*\*Example question:\*\*
-
-
-
-Who manages Project Atlas?
-
-
-
-\*\*Expected answer:\*\*
-
-
-
-Ravi manages Project Atlas.
-
-
-
-The answer is generated using retrieved document and graph evidence.
-
-
-
-\## Testing
-
-
-
-Run the test suite from the project root:
-
-
-
-```powershell
-
-pytest -v
-
-```
-
-
-
-Tests cover document loading, chunking, entity extraction, relationship extraction, graph construction, reasoning, retrieval, and RAG pipeline behavior.
-
-
-
-\## Current Limitations and Future Enhancements
-
-
-
-\- Improve entity extraction for previously unseen enterprise entities.
-
-\- Add entity resolution and duplicate detection.
-
-\- Strengthen relationship extraction beyond predefined patterns.
-
-\- Introduce claim-level semantic grounding evaluation.
-
-\- Add document listing, deletion, and lifecycle management.
-
-\- Improve graph visualization and multi-hop reasoning.
-
-\- Expand integration and performance testing.
-
-\- Add authentication, authorization, and production deployment support.
-
-
-
-\## Project Structure
-
-
+Interactive API documentation is available at:
 
 ```text
-
-Enterprise-Knowledge-Graph-Connector/
-
-│
-
-├── backend/
-
-│   └── main.py
-
-│
-
-├── data/
-
-│   └── sample\_documents/
-
-│
-
-├── evaluation/
-
-│   └── grounding\_evaluator.py
-
-│
-
-├── extraction/
-
-│   ├── entity\_extractor.py
-
-│   └── relationship\_extractor.py
-
-│
-
-├── frontend/
-
-│   └── app.py
-
-│
-
-├── ingestion/
-
-│   ├── document\_loader.py
-
-│   ├── chunker.py
-
-│   └── pipeline.py
-
-│
-
-├── knowledge\_graph/
-
-│   ├── graph\_builder.py
-
-│   ├── neo4j\_store.py
-
-│   ├── reasoning\_engine.py
-
-│   └── workflow.py
-
-│
-
-├── rag/
-
-│   ├── answer\_generator.py
-
-│   └── rag\_pipeline.py
-
-│
-
-├── retrieval/
-
-│   └── hybrid\_retriever.py
-
-│
-
-├── vector\_store/
-
-│   └── chroma\_store.py
-
-│
-
-├── scripts/
-
-├── tests/
-
-├── .env.example
-
-├── .gitignore
-
-├── requirements.txt
-
-└── README.md
-
+http://127.0.0.1:8000/docs
 ```
 
+## Evaluation
 
+### Retrieval Evaluation
 
-\## Contributors
+The preliminary retrieval evaluation dataset contains three queries across two documents.
 
+| Metric | Result |
+|---|---:|
+| Precision@5 | 0.40 |
+| Recall@5 | 1.00 |
+| MRR | 1.00 |
+| Average retrieval latency | 141.61 ms |
 
+**Metric interpretation:**
+- Precision@5 measures the proportion of relevant chunks among the top five retrieved chunks.
+- Recall@5 measures whether relevant documents were retrieved in the top five.
+- MRR measures the ranking position of the first relevant result.
+- Retrieval latency measures the time taken for retrieval.
 
-Developed as a collaborative AI and Data Science project.
+These results are preliminary and should not be interpreted as performance across a large enterprise dataset.
 
+### Automated Testing
 
+Latest recorded full test-suite result:
 
-\*\*Core areas:\*\* Generative AI, Retrieval-Augmented Generation, Knowledge Graphs, NLP, Vector Databases, and Backend Development.
+**107 tests passed, 2 warnings.**
 
+Additional workflow validation:
 
+**3 workflow tests passed.**
 
-\## License
+The project includes tests covering ingestion, document processing, retrieval, entity extraction, entity resolution, relationship extraction, graph reasoning, visualization, grounding, and application workflows.
 
+## Limitations
 
+- Retrieval evaluation currently uses a small dataset and should be expanded.
+- The grounding evaluator uses lexical overlap heuristics and does not independently establish semantic entailment.
+- Answer quality depends on document quality, retrieval performance, and LLM availability.
+- Production deployment requires appropriate database configuration, authentication, monitoring, and secret management.
 
-License to be added.
+## Contributors
+
+This project is developed collaboratively, with responsibilities covering core GenAI development and integration, document processing, knowledge graph and NLP development, and testing and deployment readiness.
+
+## License
+
+Add the project's selected license before distributing or reusing the repository.
 

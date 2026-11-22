@@ -65,3 +65,25 @@ def test_explain_relationship():
     )
 
     assert evidence == "Asha works on Project Atlas."
+def test_find_paths_and_indirect_departments():
+    kg = KnowledgeGraph()
+    kg.add_entity("Gagan", "PERSON")
+    kg.add_entity("AI Development Team", "TEAM")
+    kg.add_entity("Technology Department", "DEPARTMENT")
+    kg.add_entity("Project Alpha", "PROJECT")
+
+    kg.add_relationship("Gagan", "BELONGS_TO", "AI Development Team", "Gagan works in AI Development Team.")
+    kg.add_relationship("AI Development Team", "BELONGS_TO", "Technology Department", "Team belongs to Technology Department.")
+    kg.add_relationship("AI Development Team", "WORKS_ON", "Project Alpha", "Team works on Project Alpha.")
+
+    reasoner = GraphReasoner(kg)
+
+    paths = reasoner.find_paths("Gagan", "Technology Department", max_hops=3)
+    assert len(paths) == 1
+    assert paths[0]["hops"] == 2
+    assert "AI Development Team" in paths[0]["reasoning"]
+
+    depts = reasoner.infer_indirect_departments("Gagan")
+    assert len(depts) == 1
+    assert depts[0]["department"] == "Technology Department"
+    assert depts[0]["via"] == "AI Development Team"

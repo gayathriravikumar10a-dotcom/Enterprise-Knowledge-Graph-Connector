@@ -15,93 +15,161 @@ K = 5
 
 def get_filename(result):
     metadata = result.get("metadata") or {}
-    return metadata.get("original_filename") or metadata.get("source")
+    return (
+        metadata.get("original_filename")
+        or metadata.get("source")
+    )
 
 
-def recall_at_k(retrieved, relevant):
-    if not relevant:
+def precision_at_k(results, relevant_filenames, k=K):
+    """
+    Chunk-level Precision@K.
+    A retrieved chunk is relevant when its source filename
+    belongs to the relevant filename set.
+    """
+    if k < 1:
+        raise ValueError("k must be at least 1")
+
+    relevant_count = sum(
+        1
+        for item in results[:k]
+        if get_filename(item) in relevant_filenames
+    )
+
+    return relevant_count / k
+
+
+def recall_at_k(results, relevant_filenames, k=K):
+    """
+    Document-level Recall@K.
+    Measures how many relevant documents appear among
+    the top K retrieved chunks.
+    """
+    if not relevant_filenames:
         return 0.0
-    return len(set(retrieved[:K]) & relevant) / len(relevant)
+
+    retrieved_filenames = {
+        get_filename(item)
+        for item in results[:k]
+        if get_filename(item)
+    }
+
+    return (
+        len(retrieved_filenames & relevant_filenames)
+        / len(relevant_filenames)
+    )
 
 
-def document_precision_at_k(retrieved, relevant):
-    unique_retrieved = list(dict.fromkeys(retrieved[:K]))
-
-    if not unique_retrieved:
-        return 0.0
-
-    return len(set(unique_retrieved) & relevant) / len(unique_retrieved)
-
-
-def reciprocal_rank(retrieved, relevant):
-    for rank, filename in enumerate(retrieved, start=1):
-        if filename in relevant:
+def reciprocal_rank(results, relevant_filenames):
+    """Return the reciprocal rank of the first relevant chunk."""
+    for rank, item in enumerate(results, start=1):
+        if get_filename(item) in relevant_filenames:
             return 1.0 / rank
+
     return 0.0
 
 
 def main():
+    if not DATASET_PATH.exists():
+        raise FileNotFoundError(
+            f"Evaluation dataset not found: {DATASET_PATH}"
+        )
+
     with open(DATASET_PATH, "r", encoding="utf-8") as file:
         test_cases = json.load(file)
 
+    if not isinstance(test_cases, list) or not test_cases:
+        raise ValueError("Evaluation dataset must contain test cases.")
+
+    for index, case in enumerate(test_cases, start=1):
+        if (
+            not isinstance(case, dict)
+            or not isinstance(case.get("query"), str)
+            or not case["query"].strip()
+            or not isinstance(case.get("relevant_filenames"), list)
+            or not case["relevant_filenames"]
+        ):
+            raise ValueError(
+                f"Invalid evaluation test case at index {index}."
+            )
+
     retriever = HybridRetriever()
-    all_results = []
+    evaluation_results = []
     latencies = []
 
     try:
         for case in test_cases:
+            query = case["query"]
+            relevant = set(case["relevant_filenames"])
+
             start = time.perf_counter()
 
             results = retriever.vector_search(
-                case["query"],
+                query,
                 top_k=K
             )
 
             latency = (time.perf_counter() - start) * 1000
             latencies.append(latency)
 
-            retrieved = []
-            for item in results:
-                filename = get_filename(item)
+            precision = precision_at_k(results, relevant)
+            recall = recall_at_k(results, relevant)
+            mrr = reciprocal_rank(results, relevant)
 
-                if filename and filename not in retrieved:
-                    retrieved.append(filename)
+            retrieved_documents = [
+                get_filename(item)
+                for item in results
+                if get_filename(item)
+            ]
 
-            relevant = set(case["relevant_filenames"])
-
-            all_results.append({
-                "query": case["query"],
-                "retrieved": retrieved,
-                "recall": recall_at_k(retrieved, relevant),
-                "precision": document_precision_at_k(retrieved, relevant),
-                "mrr": reciprocal_rank(retrieved, relevant),
+            evaluation_results.append({
+                "query": query,
+                "retrieved_documents": retrieved_documents,
+                "precision": precision,
+                "recall": recall,
+                "mrr": mrr,
                 "latency": latency
             })
 
     finally:
         retriever.close()
 
-    count = len(all_results)
-
-    if not count:
-        print("No evaluation queries found.")
-        return
+    count = len(evaluation_results)
 
     print("\n========== VECTOR RETRIEVAL EVALUATION ==========")
+    print("Evaluation queries:", count)
+    print("K:", K)
 
-    for index, result in enumerate(all_results, start=1):
+    for index, result in enumerate(evaluation_results, start=1):
         print(f"\nQuery {index}: {result['query']}")
-        print("Retrieved documents:", result["retrieved"])
+        print("Retrieved chunks' documents:",
+              result["retrieved_documents"])
+        print("Precision@5:", round(result["precision"], 4))
         print("Recall@5:", round(result["recall"], 4))
-        print("Document Precision@5:", round(result["precision"], 4))
-        print("Reciprocal Rank:", round(result["mrr"], 4))
-        print("Latency:", round(result["latency"], 2), "ms")
+        print("MRR:", round(result["mrr"], 4))
+        print("Retrieval latency:",
+              round(result["latency"], 2), "ms")
+
+    mean_precision = sum(
+        result["precision"] for result in evaluation_results
+    ) / count
+
+    mean_recall = sum(
+        result["recall"] for result in evaluation_results
+    ) / count
+
+    mean_mrr = sum(
+        result["mrr"] for result in evaluation_results
+    ) / count
+
+    average_latency = sum(latencies) / len(latencies)
 
     print("\n========== FINAL METRICS ==========")
-    print("Mean Recall@5:", round(sum(r["recall"] for r in all_results) / count, 4))
-    print("Mean Document Precision@5:", round(sum(r["precision"] for r in all_results) / count, 4))
-    print("MRR:", round(sum(r["mrr"] for r in all_results) / count, 4))
-    print("Average Latency:", round(sum(latencies) / len(latencies), 2), "ms")
+    print("Mean Precision@5:", round(mean_precision, 4))
+    print("Mean Recall@5:", round(mean_recall, 4))
+    print("Mean MRR:", round(mean_mrr, 4))
+    print("Average Retrieval Latency:",
+          round(average_latency, 2), "ms")
 
 
 if __name__ == "__main__":

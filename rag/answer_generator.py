@@ -1,8 +1,11 @@
-﻿import os
+﻿
+import os
+import json
+import urllib.request
+import urllib.error
 from pathlib import Path
 
 from dotenv import load_dotenv
-from google import genai
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -12,18 +15,24 @@ load_dotenv(PROJECT_ROOT / ".env")
 class GroundedAnswerGenerator:
 
     def __init__(self, model_name=None):
-        api_key = os.getenv("GEMINI_API_KEY")
+        self.api_key = os.getenv("OPENROUTER_API_KEY")
 
-        if not api_key:
+        if not self.api_key:
             raise ValueError(
-                "GEMINI_API_KEY is missing from the .env file."
+                "OPENROUTER_API_KEY is missing from the .env file."
             )
-
-        self.client = genai.Client(api_key=api_key)
 
         self.model_name = (
             model_name
-            or os.getenv("GEMINI_MODEL", "gemini-3.5-flash")
+            or os.getenv("OPENROUTER_MODEL", "openrouter/free")
+        )
+
+        self.api_url = "https://openrouter.ai/api/v1/chat/completions"
+
+        self.site_url = os.getenv("OPENROUTER_SITE_URL", "")
+        self.app_name = os.getenv(
+            "OPENROUTER_APP_NAME",
+            "Enterprise Knowledge Graph Connector"
         )
 
     @staticmethod
@@ -118,6 +127,8 @@ STRICT RULES:
    clearly state that insufficient evidence is available.
 4. Keep the answer concise and direct.
 5. Use the supporting evidence when explaining the answer.
+6. Clearly distinguish between separate projects.
+7. Do not infer missing information.
 
 USER QUESTION:
 {query}
@@ -128,22 +139,68 @@ RETRIEVED EVIDENCE:
 ANSWER:
 """
 
+        payload = {
+            "model": self.model_name,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": prompt
+                }
+            ],
+            "temperature": 0.1
+        }
+
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+            "HTTP-Referer": self.site_url or "http://localhost",
+            "X-Title": self.app_name
+        }
+
+        request = urllib.request.Request(
+            self.api_url,
+            data=json.dumps(payload).encode("utf-8"),
+            headers=headers,
+            method="POST"
+        )
+
         try:
-            response = self.client.models.generate_content(
-                model=self.model_name,
-                contents=prompt
+            with urllib.request.urlopen(
+                request,
+                timeout=90
+            ) as response:
+                result = json.loads(
+                    response.read().decode("utf-8")
+                )
+
+            choices = result.get("choices", [])
+
+            if not choices:
+                raise RuntimeError(
+                    "OpenRouter returned no answer choices."
+                )
+
+            answer = (
+                choices[0]
+                .get("message", {})
+                .get("content", "")
             )
 
-            answer = response.text
+            if isinstance(answer, list):
+                answer = " ".join(
+                    item.get("text", "")
+                    for item in answer
+                    if isinstance(item, dict)
+                )
 
-            if not answer:
+            if not answer or not str(answer).strip():
                 answer = (
                     "The model returned an empty response. "
                     "Please try again."
                 )
 
             return {
-                "answer": answer.strip(),
+                "answer": str(answer).strip(),
                 "sources": {
                     "document_chunks": len(vector_results),
                     "graph_relationships": len(graph_results)
@@ -152,8 +209,23 @@ ANSWER:
                 "model": self.model_name
             }
 
+        except urllib.error.HTTPError as error:
+            error_body = error.read().decode(
+                "utf-8", errors="replace"
+            )
+
+            raise RuntimeError(
+                f"OpenRouter API failed with HTTP "
+                f"{error.code}: {error_body}"
+            ) from error
+
+        except urllib.error.URLError as error:
+            raise RuntimeError(
+                f"Could not connect to OpenRouter: {error.reason}"
+            ) from error
+
         except Exception as error:
             raise RuntimeError(
-                f"Gemini generation failed using "
+                f"OpenRouter generation failed using "
                 f"'{self.model_name}': {error}"
             ) from error

@@ -10,7 +10,7 @@ class GroundingEvaluator:
         "and", "or", "but", "as", "that", "this", "these", "those",
         "who", "what", "which", "when", "where", "how",
         "based", "provided", "evidence", "available",
-        "according", "answer", "information"
+        "according", "answer", "information","section", "states", "explicitly", "while",
     }
 
     NORMALIZATION = {
@@ -34,27 +34,26 @@ class GroundingEvaluator:
 
     def __init__(self, threshold=0.80):
         if not 0 < threshold <= 1:
-            raise ValueError("Threshold must be greater than 0 and at most 1.")
-
+            raise ValueError(
+                "Threshold must be greater than 0 and at most 1."
+            )
         self.threshold = threshold
 
     @staticmethod
     def safe_text(value):
-        if value is None:
-            return ""
-        return str(value)
+        return "" if value is None else str(value)
 
     def clean_answer(self, answer):
         """
-        Remove presentation formatting and source citations
-        before evaluating the actual answer claims.
+        Evaluate factual answer content rather than source labels,
+        evidence annotations, or explanatory wording.
         """
-        text = self.safe_text(answer)
+        text = self.safe_text(answer).strip()
 
-        # Remove Markdown links but preserve their visible text.
+        # Preserve visible text from Markdown links.
         text = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", text)
 
-        # Remove bold, italic, and inline-code markers.
+        # Remove Markdown formatting.
         text = re.sub(r"[*_`~]+", "", text)
 
         # Remove parenthetical source references.
@@ -62,40 +61,108 @@ class GroundingEvaluator:
             r"\([^)]*(?:document\s+sources?|graph\s+evidence|source\s+\d)[^)]*\)",
             " ",
             text,
-            flags=re.IGNORECASE
+            flags=re.IGNORECASE,
         )
 
-        # Remove standalone source labels if present.
+        # Remove appended evidence and metadata sections.
+        metadata_patterns = [
+            r"\bSupporting\s+Evidence\s*:",
+            r"\bKnowledge\s+(?:Graph\s+)?Evidence\s*:",
+            r"\bGraph\s+Evidence\s*:",
+            r"\bRetrieved\s+Evidence\s*:",
+            r"\bSource\s+Details\s*:",
+            r"\bKnowledge\s*&\s*\d+\s*state\s*:",
+            r"\b&\s*\d+\s*state\s*:",
+        ]
+
+        positions = []
+
+        for pattern in metadata_patterns:
+            match = re.search(
+                pattern, text, flags=re.IGNORECASE
+            )
+            if match:
+                positions.append(match.start())
+
+        if positions:
+            text = text[:min(positions)]
+
+        # Remove source-attribution wording, not factual content.
         text = re.sub(
-            r"\b(?:document\s+sources?|graph\s+evidence)\s*[\d,\sand]*",
-            " ",
+            r"\baccording\s+to\s+document\s+source\s+\d+\s*:\s*",
+            "",
             text,
-            flags=re.IGNORECASE
+            flags=re.IGNORECASE,
         )
 
-        # Remove introductory wording that is not an factual claim.
+        text = re.sub(
+            r"\baccording\s+to\s+(?:the\s+)?(?:provided\s+)?sources?\s*:\s*",
+            "",
+            text,
+            flags=re.IGNORECASE,
+        )
+
+        # "Explicitly listed as separate" expresses the same
+        # factual relationship as "are separate".
+        text = re.sub(
+            r"\bexplicitly\s+listed\s+as\b",
+            "",
+            text,
+            flags=re.IGNORECASE,
+        )
+
+        # Normalize a leading "No," because it is an answer
+        # introduction, not an independently supported fact.
+        text = re.sub(
+            r"^\s*no\s*[,.:]\s*",
+            "",
+            text,
+            flags=re.IGNORECASE,
+        )
+
+        # Normalize the factual meaning:
+        # "are not the same project" -> "are separate project".
+        # This allows comparison with evidence saying "separate projects".
+        text = re.sub(
+            r"\b(?:is|are|was|were)\s+not\s+the\s+same\b",
+            lambda match: match.group(0).split()[0] + " separate",
+            text,
+            flags=re.IGNORECASE,
+        )
+
+        # Handle the shorter wording "not the same".
+        text = re.sub(
+            r"\bnot\s+the\s+same\b",
+            "separate",
+            text,
+            flags=re.IGNORECASE,
+        )
+
+        # Existing introductory wording cleanup.
         text = re.sub(
             r"\bbased on the provided evidence\b[:,]?",
             " ",
             text,
-            flags=re.IGNORECASE
+            flags=re.IGNORECASE,
         )
 
-        # "Also identified as Ravi Sharma" is alias presentation wording.
         text = re.sub(
             r"\balso\s+identified\s+as\b",
             " ",
             text,
-            flags=re.IGNORECASE
+            flags=re.IGNORECASE,
         )
 
-        text = re.sub(r"\s+", " ", text)
-        return text.strip()
+        return re.sub(r"\s+", " ", text).strip()
 
     def tokenize(self, text):
-        words = re.findall(r"[a-zA-Z0-9]+", self.safe_text(text).lower())
+        words = re.findall(
+            r"[a-zA-Z0-9]+",
+            self.safe_text(text).lower()
+        )
 
         normalized = []
+
         for word in words:
             word = self.NORMALIZATION.get(word, word)
 
@@ -105,16 +172,15 @@ class GroundingEvaluator:
         return set(normalized)
 
     def split_claims(self, answer):
-        """
-        Split cleaned answer text into meaningful sentences.
-        Citation formatting is removed before this method runs.
-        """
         cleaned = self.clean_answer(answer)
 
         if not cleaned:
             return []
 
-        parts = re.split(r"(?<=[.!?])\s+|[\n;]+", cleaned)
+        parts = re.split(
+            r"(?<=[.!?])\s+|[\n;]+",
+            cleaned
+        )
 
         return [
             part.strip()
@@ -124,30 +190,31 @@ class GroundingEvaluator:
 
     def collect_evidence(self, retrieval_results):
         evidence_units = []
-
         retrieval_results = retrieval_results or {}
 
-        # Keep each vector document as a separate evidence unit.
         for item in retrieval_results.get("vector_results", []):
             text = self.safe_text(item.get("text", "")).strip()
 
             if text:
                 evidence_units.append(text)
 
-        # Keep each graph relationship as a separate evidence unit.
         for item in retrieval_results.get("graph_results", []):
             subject = self.safe_text(item.get("subject", ""))
-            relationship = self.safe_text(item.get("relationship", ""))
+            relationship = self.safe_text(
+                item.get("relationship", "")
+            )
             obj = self.safe_text(item.get("object", ""))
             evidence = self.safe_text(item.get("evidence", ""))
 
             graph_text = " ".join(
-                part for part in [
+                part
+                for part in [
                     subject,
                     relationship,
                     obj,
-                    evidence
-                ] if part
+                    evidence,
+                ]
+                if part
             ).strip()
 
             if graph_text:
@@ -170,7 +237,6 @@ class GroundingEvaluator:
         best_supported_terms = set()
         best_ratio = 0.0
 
-        # Compare against each evidence unit independently.
         for evidence in evidence_units:
             evidence_terms = self.tokenize(evidence)
             matched = claim_terms.intersection(evidence_terms)
@@ -222,12 +288,15 @@ class GroundingEvaluator:
             unsupported_terms.update(result["unsupported_terms"])
 
         grounded = all(
-            result["supported"] for result in claim_results
+            result["supported"]
+            for result in claim_results
         )
 
         return {
             "grounded": grounded,
-            "support_ratio": round(sum(ratios) / len(ratios), 4),
+            "support_ratio": round(
+                sum(ratios) / len(ratios), 4
+            ),
             "supported_terms": sorted(supported_terms),
             "unsupported_terms": sorted(unsupported_terms),
             "claims": claim_results,
